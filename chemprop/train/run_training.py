@@ -59,6 +59,12 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
     args.target_features_size = data.target_features_size()
     debug(f'Number of tasks = {args.num_tasks}')
 
+    # Get additional data
+    additional_data = {
+        name: get_data(path=data, args=args, logger=logger, target_features_path=[tgt_path])
+        for name, data, tgt_path in zip(args.additional_train_data_name, args.additional_train_data, args.additional_target_features_path)
+    }
+
     # Split data
     debug(f'Splitting data with seed {args.seed}')
     if args.separate_test_path:
@@ -140,8 +146,20 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
         cache=cache,
         class_balance=args.class_balance,
         shuffle=True,
+        drop_last=True,
         seed=args.seed
     )
+    additional_data_loader = {
+            k: MoleculeDataLoader(
+                dataset=v,
+                batch_size=args.batch_size,
+                num_workers=num_workers,
+                cache=cache,
+                drop_last=True,
+                shuffle=True,
+                seed=args.seed
+            ) for k, v in additional_data.items()
+    }
     eval_train_data_loader = MoleculeDataLoader(
         dataset=train_data,
         batch_size=args.batch_size,
@@ -204,6 +222,7 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
             n_iter = train(
                 model=model,
                 data_loader=train_data_loader,
+                additional_dataloaders=additional_data_loader,
                 loss_func=loss_func,
                 optimizer=optimizer,
                 scheduler=scheduler,

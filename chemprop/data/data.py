@@ -350,6 +350,7 @@ class MoleculeDataLoader(DataLoader):
                  num_workers: int = 8,
                  cache: bool = False,
                  class_balance: bool = False,
+                 drop_last: bool = False,
                  shuffle: bool = False,
                  seed: int = 0):
         """
@@ -372,6 +373,7 @@ class MoleculeDataLoader(DataLoader):
         self._class_balance = class_balance
         self._shuffle = shuffle
         self._seed = seed
+        self._drop_last = drop_last
 
         self._sampler = MoleculeSampler(
             dataset=self._dataset,
@@ -397,7 +399,8 @@ class MoleculeDataLoader(DataLoader):
             batch_size=self._batch_size,
             sampler=self._sampler,
             num_workers=self._num_workers,
-            collate_fn=construct_molecule_batch
+            collate_fn=construct_molecule_batch,
+            drop_last=self._drop_last
         )
 
     def targets(self) -> List[List[float]]:

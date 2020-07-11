@@ -140,6 +140,8 @@ class TrainArgs(CommonArgs):
     log_frequency: int = 10  # The number of batches between each logging of the training loss
     show_individual_scores: bool = False  # Show all scores for individual targets, not just average, at the end
     cache_cutoff: int = 10000  # Maximum number of molecules in dataset to allow caching. Below this number, caching is used and data loading is sequential. Above this number, caching is not used and data loading is parallel.
+    count_score_above_threshold: bool = False
+    thresholds: List[float] = []
 
     # Model arguments
     bias: bool = False  # Whether to add bias to linear layers
@@ -161,6 +163,9 @@ class TrainArgs(CommonArgs):
     distill_lambda: float = 0.1 # Lambda for distlil task
     distill: str = "base_distill"
     main_loss_lambda: float = 1
+    additional_train_data: List[str] = []
+    additional_train_data_name: List[str] = []
+    additional_target_features_path: List[str] = []
 
     # Training arguments
     epochs: int = 30  # Number of epochs to run
@@ -169,6 +174,7 @@ class TrainArgs(CommonArgs):
     max_lr: float = 1e-3  # Maximum learning rate
     final_lr: float = 1e-4  # Final learning rate
     class_balance: bool = False  # Trains with an equal number of positives and negatives in each batch (only for single task classification)
+
 
     def __init__(self, *args, **kwargs) -> None:
         super(TrainArgs, self).__init__(*args, **kwargs)

@@ -12,8 +12,8 @@ class BaseDistill(nn.Module):
     def forward(self, x):
         return x, {}
 
-    def compute_loss(self, output_dict, target_features_batch):
-        return torch.zeros_like(target_features_batch)
+    def compute_loss(self, context):
+        return torch.tensor(0).to(context['device'])
 
     def additional_losses_to_log(self):
         return {}
@@ -23,14 +23,17 @@ class MseDistill(BaseDistill):
     def __init__(self, args):
         super(MseDistill, self).__init__(args)
         self.ffn = get_auxiliary_ffn(get_encoded_dim(args), args.target_features_size, args)
-        self.mse = nn.MSELoss(reduction = 'none')
+        self.mse = nn.MSELoss(reduction = 'mean')
         self.args = args
 
     def forward(self, x, **kwargs):
         return x, {'student_z': self.ffn(x)}
 
-    def compute_loss(self, output_dict, target_features_batch):
-        return self.args.distill_lambda * self.mse(output_dict['student_z'], target_features_batch)
+    def mse_loss_fn(self, context):
+        return self.args.distill_lambda * self.mse(context['student_z'], context['target_features_batch'])
+
+    def compute_loss(self, context):
+        return self.mse_loss_fn(context)
 
 @RegisterDistill("pred_as_hidden_mse_distill")
 class PredAsHiddenMseDistill(MseDistill):
@@ -48,19 +51,45 @@ class PredictionDistill(BaseDistill):
 
     def distill_loss_func(self, preds, targets):
         if self.args.dataset_type in ['classification', 'multiclass']:
-            return F.kl_div(preds, torch.sigmoid(targets), reduction='none')
+            return F.kl_div(preds, torch.sigmoid(targets), reduction='mean')
         else:
-            return F.mse_loss(preds, targets, reduction='none')
+            return F.mse_loss(preds, targets, reduction='mean')
 
-    def compute_loss(self, output_dict, target_features_batch):
-        teacher_y = self.ffn(target_features_batch)
-        student_y = output_dict['logits']
-        teacher_loss = output_dict['compute_loss_fn'](teacher_y)
+    def compute_loss(self, context):
+        teacher_y = self.ffn(context['target_features_batch'])
+        student_y = context['logits']
+        teacher_loss = context['compute_loss_fn'](teacher_y)
         self.teacher_loss = teacher_loss.item()
         return teacher_loss + self.args.distill_lambda * self.distill_loss_func(teacher_y.detach(), student_y)
 
     def additional_losses_to_log(self):
         return {"teacher_loss": self.teacher_loss}
+
+@RegisterDistill("regret_distill")
+class RegretDistill(MseDistill):
+    def compute_loss(self, context):
+        mse_loss = self.mse_loss_fn(context)
+
+        heldout_student_y = context['model.ffn'](context['heldout_student_z'])
+        heldout_teacher_y = context['model.ffn'](context['heldout_target_features_batch'])
+
+        main_teacher_y = context['model.ffn'](context['target_features_batch'])
+        teacher_loss = context['compute_loss_fn'](main_teacher_y)
+
+        regret_loss = context['heldout_compute_loss_fn'](heldout_teacher_y.detach()) - context['heldout_compute_loss_fn'](heldout_student_y)
+
+        self.teacher_loss = teacher_loss.item()
+        self.regret_loss = regret_loss.item()
+        self.mse_loss = mse_loss.item()
+
+        return self.args.distill_lambda * (regret_loss + mse_loss)
+
+    def additional_losses_to_log(self):
+        return {
+            "teacher_loss": self.teacher_loss,
+            "regret_loss": self.regret_loss,
+            "mse_loss": self.mse_loss,
+        }
 
 
 def get_encoded_dim(args):

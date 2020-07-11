@@ -51,4 +51,11 @@ def cross_validate(args: TrainArgs, logger: Logger = None) -> Tuple[float, float
             info(f'Overall test {task_name} {args.metric} = '
                  f'{np.nanmean(all_scores[:, task_num]):.6f} +/- {np.nanstd(all_scores[:, task_num]):.6f}')
 
+    if args.count_score_above_threshold:
+        for threshold in args.thresholds:
+            num_tasks = (all_scores > threshold).sum(axis=-1).mean(axis=0)
+            info(f'Test {args.metric} above {threshold} = '
+                 f'{num_tasks}')
+
+
     return mean_score, std_score

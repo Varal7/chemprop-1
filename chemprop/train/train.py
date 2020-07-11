@@ -1,5 +1,5 @@
 import logging
-from typing import Callable
+from typing import Callable, Dict
 
 from tensorboardX import SummaryWriter
 import torch
@@ -17,6 +17,7 @@ from chemprop.nn_utils import compute_gnorm, compute_pnorm, NoamLR
 
 def train(model: nn.Module,
           data_loader: MoleculeDataLoader,
+          additional_dataloaders: Dict[str, MoleculeDataLoader],
           loss_func: Callable,
           optimizer: Optimizer,
           scheduler: _LRScheduler,
@@ -46,50 +47,67 @@ def train(model: nn.Module,
 
     additional_losses_sum = Counter()
 
-    for batch in tqdm(data_loader, total=len(data_loader)):
+    iterable_dataloaders = {"main": iter(data_loader)}
+
+    iterable_dataloaders.update({k: iter(d) for k, d in additional_dataloaders.items()})
+
+
+    for _ in tqdm(range(len(data_loader))):
+        context = {}
         # Prepare batch
-        batch: MoleculeDataset
-        mol_batch, features_batch, target_batch, target_features_batch = batch.batch_graph(), batch.features(), batch.targets(), batch.target_features()
-        mask = torch.Tensor([[x is not None for x in tb] for tb in target_batch])
-        targets = torch.Tensor([[0 if x is None else x for x in tb] for tb in target_batch])
+        for name in iterable_dataloaders.keys():
+            try:
+                batch : MoleculeDataset = next(iterable_dataloaders[name])
+            except StopIteration:
+                assert name != "main"
+                iterable_dataloaders[name] = iter(additional_dataloaders[name])
 
-        # Run model
-        model.zero_grad()
-        preds, output_dict = model(mol_batch, features_batch)
+            mol_batch, features_batch, target_batch, target_features_batch = batch.batch_graph(), batch.features(), batch.targets(), batch.target_features()
+            mask = torch.Tensor([[x is not None for x in tb] for tb in target_batch])
+            targets = torch.Tensor([[0 if x is None else x for x in tb] for tb in target_batch])
 
-        # Move tensors to correct device
-        mask = mask.to(preds.device)
-        targets = targets.to(preds.device)
-        class_weights = torch.ones(targets.shape, device=preds.device)
+            # Run model
+            model.zero_grad()
+            preds, local_context = model(mol_batch, features_batch)
+
+            # Move tensors to correct device
+            mask = mask.to(preds.device)
+            targets = targets.to(preds.device)
+            class_weights = torch.ones(targets.shape, device=preds.device)
+
+            def compute_loss(preds):
+                if args.dataset_type == 'multiclass':
+                    targets_l = targets.long()
+                    main_loss = torch.cat([loss_func(preds[:, target_index, :], targets_l[:, target_index]).unsqueeze(1) for target_index in range(preds.size(1))], dim=1) * class_weights * mask
+                else:
+                    main_loss = loss_func(preds, targets) * class_weights * mask
+
+                main_loss = main_loss.sum() / mask.sum()
+
+                return main_loss
+
+            local_context['loss'] = compute_loss(preds)
+            local_context['compute_loss_fn'] = compute_loss
+
+            context['model.ffn'] = model.ffn
+
+            context['device'] = preds.device
+
+            local_context['target_features_mask'] = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch]).to(preds.device)
+            local_context['target_features_batch'] = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch]).to(preds.device)
+
+
+            key_prefix = "" if name == "main" else f"{name}_"
+            context.update({(key_prefix + k): v for k, v in local_context.items()})
 
 
         if model.use_distill:
-            target_features_mask = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch]).to(preds.device)
-            target_features_batch = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch]).to(preds.device)
-
-
-        def compute_loss(preds):
-            if args.dataset_type == 'multiclass':
-                targets_l = targets.long()
-                main_loss = torch.cat([loss_func(preds[:, target_index, :], targets_l[:, target_index]).unsqueeze(1) for target_index in range(preds.size(1))], dim=1) * class_weights * mask
-            else:
-                main_loss = loss_func(preds, targets) * class_weights * mask
-
-            main_loss = main_loss.sum() / mask.sum()
-
-            return main_loss
-
-        main_loss = compute_loss(preds)
-
-        if model.use_distill:
-            output_dict['compute_loss_fn'] = compute_loss
-            distill_loss = model.distill.compute_loss(output_dict, target_features_batch).mean(axis=1).unsqueeze(1) * target_features_mask
-            distill_loss = distill_loss.sum() / target_features_mask.sum()
+            distill_loss = model.distill.compute_loss(context)
             additional_losses_to_log = model.distill.additional_losses_to_log()
         else:
-            distill_loss = 0
+            distill_loss = torch.tensor(0).to(context['device'])
 
-        loss = args.main_loss_lambda * main_loss + distill_loss
+        loss = args.main_loss_lambda * context['loss'] + distill_loss
 
         loss.backward()
         optimizer.step()
@@ -98,7 +116,7 @@ def train(model: nn.Module,
         iter_count += len(batch)
 
         if model.use_distill:
-            main_loss_sum += main_loss.sum()
+            main_loss_sum += context['loss'].sum()
             distill_loss_sum += distill_loss.sum()
             for key, value in additional_losses_to_log.items():
                 additional_losses_sum[key] += value
