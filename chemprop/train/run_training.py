@@ -81,6 +81,11 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
     else:
         train_data, val_data, test_data = split_data(data=data, split_type=args.split_type, sizes=args.split_sizes, seed=args.seed, args=args, logger=logger)
 
+    if "regret" in args.distill and "heldout" not in additional_data:
+        train_data, heldout_data, _ = split_data(data=data, split_type=args.split_type, sizes=(0.8, 0.2, 0.0), seed=args.seed, args=args, logger=logger)
+        additional_data['heldout'] = heldout_data
+
+
     if args.dataset_type == 'classification':
         class_sizes = get_class_sizes(data)
         debug('Class sizes')

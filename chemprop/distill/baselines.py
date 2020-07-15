@@ -65,8 +65,39 @@ class PredictionDistill(BaseDistill):
     def additional_losses_to_log(self):
         return {"teacher_loss": self.teacher_loss}
 
-@RegisterDistill("regret_distill")
-class RegretDistill(MseDistill):
+
+@RegisterDistill("regret_as_kl_distill")
+class RegretAsKlDistill(PredictionDistill):
+    def compute_loss(self, context):
+        teacher_y = self.ffn(context['target_features_batch'])
+        student_y = context['logits']
+
+        heldout_student_y = context['heldout_logits']
+        heldout_teacher_y = context['model.ffn'](context['heldout_target_features_batch'])
+
+        teacher_loss = context['compute_loss_fn'](teacher_y)
+
+        heldout_kl_loss = self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
+        kl_loss = self.distill_loss_func(teacher_y.detach(), student_y)
+
+        self.teacher_loss = teacher_loss.item()
+        self.kl_loss = kl_loss.item()
+        self.heldout_kl_loss = heldout_kl_loss.item()
+
+        return torch.tensor(0).to(context['device'])
+        #  return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
+        #  return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
+
+    def additional_losses_to_log(self):
+        return {
+            "teacher_loss": self.teacher_loss,
+            "kl_loss": self.kl_loss,
+            "heldout_kl_loss": self.heldout_kl_loss,
+        }
+
+
+@RegisterDistill("regret_mse_distill")
+class RegretMseDistill(MseDistill):
     def compute_loss(self, context):
         mse_loss = self.mse_loss_fn(context)
 
@@ -76,13 +107,13 @@ class RegretDistill(MseDistill):
         main_teacher_y = context['model.ffn'](context['target_features_batch'])
         teacher_loss = context['compute_loss_fn'](main_teacher_y)
 
-        regret_loss = context['heldout_compute_loss_fn'](heldout_teacher_y.detach()) - context['heldout_compute_loss_fn'](heldout_student_y)
+        regret_loss = - context['heldout_compute_loss_fn'](heldout_teacher_y.detach()) + context['heldout_compute_loss_fn'](heldout_student_y)
 
         self.teacher_loss = teacher_loss.item()
         self.regret_loss = regret_loss.item()
         self.mse_loss = mse_loss.item()
 
-        return self.args.distill_lambda * (regret_loss + mse_loss)
+        return self.args.distill_lambda * (regret_loss + mse_loss + teacher_loss)
 
     def additional_losses_to_log(self):
         return {

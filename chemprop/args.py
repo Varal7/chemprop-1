@@ -140,8 +140,7 @@ class TrainArgs(CommonArgs):
     log_frequency: int = 10  # The number of batches between each logging of the training loss
     show_individual_scores: bool = False  # Show all scores for individual targets, not just average, at the end
     cache_cutoff: int = 10000  # Maximum number of molecules in dataset to allow caching. Below this number, caching is used and data loading is sequential. Above this number, caching is not used and data loading is parallel.
-    count_score_above_threshold: bool = False
-    thresholds: List[float] = []
+    show_thresholds: List[float] = []
 
     # Model arguments
     bias: bool = False  # Whether to add bias to linear layers
