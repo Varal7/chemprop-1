@@ -10,7 +10,7 @@ class BaseDistill(nn.Module):
         super(BaseDistill, self).__init__()
 
     def forward(self, x):
-        return x, {}
+        return x, {'student_z': x}
 
     def compute_loss(self, context):
         return torch.tensor(0).to(context['device'])
@@ -84,8 +84,8 @@ class RegretAsKlDistill(PredictionDistill):
         self.kl_loss = kl_loss.item()
         self.heldout_kl_loss = heldout_kl_loss.item()
 
-        return torch.tensor(0).to(context['device'])
-        #  return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
+        #  return torch.tensor(0).to(context['device'])
+        return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
         #  return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
 
     def additional_losses_to_log(self):
@@ -121,6 +121,42 @@ class RegretMseDistill(MseDistill):
             "regret_loss": self.regret_loss,
             "mse_loss": self.mse_loss,
         }
+
+
+
+@RegisterDistill("regret_concat_distill")
+class RegretConcatDistill(BaseDistill):
+    def __init__(self, args):
+        super(RegretConcatDistill, self).__init__(args)
+        encoded_dim = get_encoded_dim(args)
+        image_dim = args.target_features_size
+        self.ffn = get_auxiliary_ffn(encoded_dim, image_dim, args)
+        self.readout = get_auxiliary_ffn(encoded_dim + image_dim, args.output_size, args)
+        self.mse = nn.MSELoss(reduction = 'mean')
+        self.args = args
+
+    def compute_loss(self, context):
+        main_teacher_y = self.readout(torch.cat([context['student_z'], context['target_features_batch']], dim=-1))
+
+        heldout_student_y = context['model.ffn'](context['heldout_student_z'])
+
+        heldout_teacher_y = self.readout(torch.cat([context['heldout_student_z'], context['heldout_target_features_batch']], dim=-1))
+
+        teacher_loss = context['compute_loss_fn'](main_teacher_y)
+
+        regret_loss = - context['heldout_compute_loss_fn'](heldout_teacher_y) + context['heldout_compute_loss_fn'](heldout_student_y)
+
+        self.teacher_loss = teacher_loss.item()
+        self.regret_loss = regret_loss.item()
+
+        return teacher_loss + self.args.distill_lambda * (regret_loss)
+
+    def additional_losses_to_log(self):
+        return {
+            "teacher_loss": self.teacher_loss,
+            "regret_loss": self.regret_loss,
+        }
+
 
 
 def get_encoded_dim(args):

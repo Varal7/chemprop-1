@@ -93,12 +93,14 @@ def train(model: nn.Module,
 
             context['device'] = preds.device
 
-            local_context['target_features_mask'] = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch]).to(preds.device)
-            local_context['target_features_batch'] = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch]).to(preds.device)
+            if target_features_batch is not None:
+                local_context['target_features_mask'] = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch]).to(preds.device)
+                local_context['target_features_batch'] = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch]).to(preds.device)
 
 
             key_prefix = "" if name == "main" else f"{name}_"
             context.update({(key_prefix + k): v for k, v in local_context.items()})
+
 
 
         if model.use_distill:
