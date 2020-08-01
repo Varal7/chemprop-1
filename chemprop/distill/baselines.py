@@ -66,35 +66,6 @@ class PredictionDistill(BaseDistill):
         return {"teacher_loss": self.teacher_loss}
 
 
-@RegisterDistill("regret_as_kl_distill")
-class RegretAsKlDistill(PredictionDistill):
-    def compute_loss(self, context):
-        teacher_y = self.ffn(context['target_features_batch'])
-        student_y = context['logits']
-
-        heldout_student_y = context['heldout_logits']
-        heldout_teacher_y = context['model.ffn'](context['heldout_target_features_batch'])
-
-        teacher_loss = context['compute_loss_fn'](teacher_y)
-
-        heldout_kl_loss = self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
-        kl_loss = self.distill_loss_func(teacher_y.detach(), student_y)
-
-        self.teacher_loss = teacher_loss.item()
-        self.kl_loss = kl_loss.item()
-        self.heldout_kl_loss = heldout_kl_loss.item()
-
-        #  return torch.tensor(0).to(context['device'])
-        return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
-        #  return teacher_loss + self.args.distill_lambda * (kl_loss + heldout_kl_loss)
-
-    def additional_losses_to_log(self):
-        return {
-            "teacher_loss": self.teacher_loss,
-            "kl_loss": self.kl_loss,
-            "heldout_kl_loss": self.heldout_kl_loss,
-        }
-
 
 @RegisterDistill("regret_mse_distill")
 class RegretMseDistill(MseDistill):
@@ -158,6 +129,95 @@ class RegretConcatDistill(BaseDistill):
         }
 
 
+@RegisterDistill("regret_kl_distill")
+class RegretKlDistill(BaseDistill):
+    def __init__(self, args):
+        super(RegretKlDistill, self).__init__(args)
+        image_dim = args.target_features_size
+        encoded_dim = get_encoded_dim(args)
+        output_dim = args.output_size
+        self.teacher_ffn = get_auxiliary_ffn(image_dim, output_dim, args)
+
+        self.heldout_student_ffn = get_auxiliary_ffn(encoded_dim, output_dim, args)
+        self.heldout_teacher_ffn = get_auxiliary_ffn(image_dim, output_dim, args)
+
+        self.heldout_student_ffn_frozen = get_auxiliary_ffn(encoded_dim, output_dim, args)
+        self.heldout_teacher_ffn_frozen = get_auxiliary_ffn(image_dim, output_dim, args)
+
+        self.main_student_ffn = get_auxiliary_ffn(encoded_dim, output_dim, args)
+        self.main_teacher_ffn = get_auxiliary_ffn(image_dim, output_dim, args)
+
+        self.gradient_reversal = GradientReversal()
+        self.args = args
+
+    def distill_loss_func(self, preds, targets):
+        if self.args.dataset_type in ['classification', 'multiclass']:
+            return F.kl_div(preds, torch.sigmoid(targets), reduction='mean')
+        else:
+            return F.mse_loss(preds, targets, reduction='mean')
+
+    def compute_loss(self, context):
+
+        def compute_erm_loss():
+            student_y = context['logits']
+            heldout_student_y = context['heldout_logits']
+            teacher_y = self.teacher_ffn(context['target_features_batch'])
+            heldout_teacher_y = self.teacher_ffn(context['heldout_target_features_batch'])
+            teacher_loss = context['compute_loss_fn'](teacher_y) + context['heldout_compute_loss_fn'](heldout_teacher_y)
+            kl_loss = self.distill_loss_func(teacher_y.detach(), student_y) + self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
+            erm_loss = context['loss'] + context['heldout_loss'] + teacher_loss + 0 * self.args.distill_lambda * kl_loss
+
+            return erm_loss
+
+        def compute_heldout_loss():
+            heldout_student_z = context['heldout_student_z'].detach()
+            heldout_student_y = self.heldout_student_ffn(heldout_student_z)
+            heldout_teacher_y = self.heldout_teacher_ffn(context['heldout_target_features_batch'])
+            heldout_student_loss = context['heldout_compute_loss_fn'](heldout_student_y)
+            heldout_teacher_loss = context['heldout_compute_loss_fn'](heldout_teacher_y)
+            kl_loss = self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
+
+            return heldout_student_loss + heldout_teacher_loss + 0 * self.args.distill_lambda * kl_loss
+
+        def compute_main_loss():
+            main_student_z = context['student_z']
+            main_student_y = self.main_student_ffn(self.gradient_reversal(main_student_z))
+
+            main_teacher_y = self.main_teacher_ffn(context['target_features_batch'])
+            main_student_loss = context['compute_loss_fn'](main_student_y)
+            main_teacher_loss = context['compute_loss_fn'](main_teacher_y)
+
+            main_kl_loss = self.distill_loss_func(main_teacher_y.detach(), main_student_y)
+
+            self.heldout_student_ffn_frozen.load_state_dict(self.heldout_student_ffn.state_dict())
+            self.heldout_teacher_ffn_frozen.load_state_dict(self.heldout_teacher_ffn.state_dict())
+
+            rgm_heldout_student_y = self.heldout_student_ffn_frozen(main_student_z)
+            rgm_heldout_teacher_y = self.heldout_teacher_ffn_frozen(context['target_features_batch'])
+
+            rgm_heldout_student_loss = context['compute_loss_fn'](rgm_heldout_student_y)
+            rgm_heldout_teacher_loss = context['compute_loss_fn'](rgm_heldout_teacher_y)
+            rgm_heldout_kl_loss = self.distill_loss_func(rgm_heldout_teacher_y.detach(), rgm_heldout_student_y)
+
+            rgm_loss = rgm_heldout_student_loss + rgm_heldout_teacher_loss + 0 * self.args.distill_lambda * rgm_heldout_kl_loss
+
+            return main_student_loss + main_teacher_loss + 0 * self.args.distill_lambda * main_kl_loss + self.args.distill_lambda * rgm_loss
+
+
+        self.erm_loss = compute_erm_loss()
+        self.heldout_loss = compute_heldout_loss()
+        self.main_loss = compute_main_loss()
+
+        return self.erm_loss + self.heldout_loss + self.main_loss
+
+
+    def additional_losses_to_log(self):
+        return {
+            "erm_loss": self.erm_loss,
+            "heldout_loss": self.heldout_loss,
+            "main_loss": self.main_loss,
+        }
+
 
 def get_encoded_dim(args):
     if args.features_only:
@@ -204,3 +264,10 @@ def get_auxiliary_ffn(first_linear_dim, output_dim, args):
 
     # Create FFN model
     return nn.Sequential(*ffn)
+
+class GradientReversal(nn.Module):
+    def forward(self, x):
+        return x
+
+    def backward(self, grad_output):
+        return -grad_output

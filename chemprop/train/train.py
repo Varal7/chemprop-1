@@ -105,6 +105,7 @@ def train(model: nn.Module,
 
         if model.use_distill:
             distill_loss = model.distill.compute_loss(context)
+
             additional_losses_to_log = model.distill.additional_losses_to_log()
         else:
             distill_loss = torch.tensor(0).to(context['device'])
