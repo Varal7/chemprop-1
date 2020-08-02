@@ -30,7 +30,7 @@ class MseDistill(BaseDistill):
         return x, {'student_z': self.ffn(x)}
 
     def mse_loss_fn(self, context):
-        return self.args.distill_lambda * self.mse(context['student_z'], context['target_features_batch'])
+        return self.args.distill_lambda * self.mse(context['student_z'], context['target_features_batch'].squeeze(1))
 
     def compute_loss(self, context):
         return self.mse_loss_fn(context)
@@ -165,7 +165,7 @@ class RegretKlDistill(BaseDistill):
             heldout_teacher_y = self.teacher_ffn(context['heldout_target_features_batch'])
             teacher_loss = context['compute_loss_fn'](teacher_y) + context['heldout_compute_loss_fn'](heldout_teacher_y)
             kl_loss = self.distill_loss_func(teacher_y.detach(), student_y) + self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
-            erm_loss = context['loss'] + context['heldout_loss'] + teacher_loss + 0 * self.args.distill_lambda * kl_loss
+            erm_loss = context['loss'] + context['heldout_loss'] + teacher_loss + self.args.distill_lambda * kl_loss
 
             return erm_loss
 
@@ -177,7 +177,7 @@ class RegretKlDistill(BaseDistill):
             heldout_teacher_loss = context['heldout_compute_loss_fn'](heldout_teacher_y)
             kl_loss = self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
 
-            return heldout_student_loss + heldout_teacher_loss + 0 * self.args.distill_lambda * kl_loss
+            return heldout_student_loss + heldout_teacher_loss + self.args.distill_lambda * kl_loss
 
         def compute_main_loss():
             main_student_z = context['student_z']
@@ -199,9 +199,9 @@ class RegretKlDistill(BaseDistill):
             rgm_heldout_teacher_loss = context['compute_loss_fn'](rgm_heldout_teacher_y)
             rgm_heldout_kl_loss = self.distill_loss_func(rgm_heldout_teacher_y.detach(), rgm_heldout_student_y)
 
-            rgm_loss = rgm_heldout_student_loss + rgm_heldout_teacher_loss + 0 * self.args.distill_lambda * rgm_heldout_kl_loss
+            rgm_loss = rgm_heldout_student_loss + rgm_heldout_teacher_loss + self.args.distill_lambda * rgm_heldout_kl_loss
 
-            return main_student_loss + main_teacher_loss + 0 * self.args.distill_lambda * main_kl_loss + self.args.distill_lambda * rgm_loss
+            return main_student_loss + main_teacher_loss + self.args.distill_lambda * main_kl_loss + self.args.distill_lambda * rgm_loss
 
 
         self.erm_loss = compute_erm_loss()

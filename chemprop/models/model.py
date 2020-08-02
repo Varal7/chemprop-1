@@ -21,7 +21,7 @@ class MoleculeModel(nn.Module):
 
         self.classification = args.dataset_type == 'classification'
         self.multiclass = args.dataset_type == 'multiclass'
-        self.use_distill = args.target_features_size is not None
+        self.use_distill = args.target_features_size is not None or args.use_distill
         self.featurizer = featurizer
 
 

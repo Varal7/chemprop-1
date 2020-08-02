@@ -24,7 +24,8 @@ def train(model: nn.Module,
           args: TrainArgs,
           n_iter: int = 0,
           logger: logging.Logger = None,
-          writer: SummaryWriter = None) -> int:
+          writer: SummaryWriter = None,
+          context = None) -> int:
     """
     Trains a model for an epoch.
 
@@ -53,7 +54,6 @@ def train(model: nn.Module,
 
 
     for _ in tqdm(range(len(data_loader))):
-        context = {}
         # Prepare batch
         for name in iterable_dataloaders.keys():
             try:
@@ -63,6 +63,8 @@ def train(model: nn.Module,
                 iterable_dataloaders[name] = iter(additional_dataloaders[name])
 
             mol_batch, features_batch, target_batch, target_features_batch = batch.batch_graph(), batch.features(), batch.targets(), batch.target_features()
+            if 'images' in context:
+                target_features_batch = context['images'].get_item(batch.smiles())
             mask = torch.Tensor([[x is not None for x in tb] for tb in target_batch])
             targets = torch.Tensor([[0 if x is None else x for x in tb] for tb in target_batch])
 
@@ -93,9 +95,13 @@ def train(model: nn.Module,
 
             context['device'] = preds.device
 
-            if target_features_batch is not None:
+            if target_features_batch is not None and 'images' not in context:
                 local_context['target_features_mask'] = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch]).to(preds.device)
                 local_context['target_features_batch'] = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch]).to(preds.device)
+
+            # TODO: Clean up
+            if 'images' in context:
+                local_context['target_features_batch'] = target_features_batch.to(preds.device)
 
 
             key_prefix = "" if name == "main" else f"{name}_"

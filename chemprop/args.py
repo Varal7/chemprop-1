@@ -161,10 +161,17 @@ class TrainArgs(CommonArgs):
     ensemble_size: int = 1  # Number of models in ensemble
     distill_lambda: float = 0.1 # Lambda for distlil task
     distill: str = "base_distill"
+    use_distill: bool = False
     main_loss_lambda: float = 1
     additional_train_data: List[str] = []
     additional_train_data_name: List[str] = []
     additional_target_features_path: List[str] = []
+    image_metadata_json_path: str = None
+    image_directory: str = None
+    num_images_per_mol: int = 1
+    smiles_to_images_pickle_path: str = None
+    image_sampler_name: Literal['mean', 'random', 'max'] = 'mean'
+
 
     # Training arguments
     epochs: int = 30  # Number of epochs to run

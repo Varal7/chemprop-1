@@ -15,7 +15,7 @@ from .evaluate import evaluate, evaluate_predictions
 from .predict import predict
 from .train import train
 from chemprop.args import TrainArgs
-from chemprop.data import StandardScaler, MoleculeDataLoader
+from chemprop.data import StandardScaler, MoleculeDataLoader, Images
 from chemprop.data.utils import get_class_sizes, get_data, get_task_names, split_data
 from chemprop.models import MoleculeModel
 from chemprop.nn_utils import param_count
@@ -82,7 +82,7 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
         train_data, val_data, test_data = split_data(data=data, split_type=args.split_type, sizes=args.split_sizes, seed=args.seed, args=args, logger=logger)
 
     if "regret" in args.distill and "heldout" not in additional_data:
-        train_data, heldout_data, _ = split_data(data=data, split_type=args.split_type, sizes=(0.5, 0.5, 0.0), seed=args.seed, args=args, logger=logger)
+        train_data, heldout_data, _ = split_data(data=train_data, split_type=args.split_type, sizes=(0.5, 0.5, 0.0), seed=args.seed, args=args, logger=logger)
         additional_data['heldout'] = heldout_data
 
 
@@ -184,6 +184,18 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
         cache=cache
     )
 
+    context = {}
+
+    # Load images
+    if args.image_metadata_json_path is not None and args.image_directory is not None:
+        context['images'] = Images.from_image_directory(args)
+
+    elif args.smiles_to_images_pickle_path is not None:
+        context['images'] = Images.from_pickle(args)
+
+    if 'images' in context:
+        args.target_features_size = context['images'].get_feature_size()
+
     # Train ensemble of models
     for model_idx in range(args.ensemble_size):
         # Tensorboard writer
@@ -221,6 +233,8 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
         best_score = float('inf') if args.minimize_score else -float('inf')
         best_epoch, n_iter = 0, 0
         print(model)
+
+
         for epoch in trange(args.epochs):
             debug(f'Epoch {epoch}')
 
@@ -234,7 +248,8 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
                 args=args,
                 n_iter=n_iter,
                 logger=logger,
-                writer=writer
+                writer=writer,
+                context=context
             )
             if isinstance(scheduler, ExponentialLR):
                 scheduler.step()
