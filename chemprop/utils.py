@@ -19,6 +19,27 @@ from chemprop.models import MoleculeModel
 from chemprop.nn_utils import NoamLR
 
 
+
+# Average Meter
+class ExponentialMovingAverageMeter:
+    def __init__(self, args):
+        self.reset()
+        self.args = args
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.first_iter = True
+
+    def update(self, val):
+        self.val = val
+        if self.first_iter:
+            self.avg = val
+            self.first_iter = False
+        else:
+            self.avg = (self.args.exponential_average_lambda) * self.avg + (1 - self.args.exponential_average_lambda) * self.val
+
+
 def makedirs(path: str, isfile: bool = False):
     """
     Creates a directory given a path to either a directory or file.
@@ -175,7 +196,7 @@ def get_loss_func(args: TrainArgs) -> nn.Module:
 
     if args.dataset_type == 'regression':
         return nn.MSELoss(reduction='none')
-    
+
     if args.dataset_type == 'multiclass':
         return nn.CrossEntropyLoss(reduction='none')
 
@@ -219,7 +240,7 @@ def mse(targets: List[float], preds: List[float]) -> float:
 def accuracy(targets: List[int], preds: List[float], threshold: float = 0.5) -> float:
     """
     Computes the accuracy of a binary prediction task using a given threshold for generating hard predictions.
-    Alternatively, compute accuracy for a multiclass prediction task by picking the largest probability. 
+    Alternatively, compute accuracy for a multiclass prediction task by picking the largest probability.
 
     :param targets: A list of binary targets.
     :param preds: A list of prediction probabilities.
@@ -248,7 +269,7 @@ def get_metric_func(metric: str) -> Callable[[Union[List[int], List[float]], Lis
 
     if metric == 'rmse':
         return rmse
-    
+
     if metric =='mse':
         return mse
 
@@ -257,10 +278,10 @@ def get_metric_func(metric: str) -> Callable[[Union[List[int], List[float]], Lis
 
     if metric == 'r2':
         return r2_score
-    
+
     if metric == 'accuracy':
         return accuracy
-    
+
     if metric == 'cross_entropy':
         return log_loss
 

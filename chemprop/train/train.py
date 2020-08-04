@@ -95,13 +95,21 @@ def train(model: nn.Module,
 
             context['device'] = preds.device
 
-            if target_features_batch is not None and 'images' not in context:
-                local_context['target_features_mask'] = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch]).to(preds.device)
-                local_context['target_features_batch'] = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch]).to(preds.device)
+            if target_features_batch is not None:
+                if not 'images' in context:
+                    initial_size = target_features_batch.size()
+                    target_features_mask = torch.Tensor([[x is not None for x in tb] for tb in target_features_batch.view(initial_size[0], -1)]).view(initial_size)
+                    target_features_batch = torch.Tensor([[0 if x != x else x for x in tb] for tb in target_features_batch.view(initial_size[0], -1)]).view(initial_size)
+                else:
+                    target_features_mask = torch.ones_like(target_features_batch)
 
-            # TODO: Clean up
-            if 'images' in context:
+                local_context['target_features_mask'] = target_features_mask.to(preds.device)
                 local_context['target_features_batch'] = target_features_batch.to(preds.device)
+
+
+                if model.use_distill and not model.distill.accepts_multi_images:
+                    local_context['target_features_mask'] = local_context['target_features_mask'].squeeze(1)
+                    local_context['target_features_batch'] = local_context['target_features_batch'].squeeze(1)
 
 
             key_prefix = "" if name == "main" else f"{name}_"
@@ -111,7 +119,6 @@ def train(model: nn.Module,
 
         if model.use_distill:
             distill_loss = model.distill.compute_loss(context)
-
             additional_losses_to_log = model.distill.additional_losses_to_log()
         else:
             distill_loss = torch.tensor(0).to(context['device'])
@@ -129,6 +136,9 @@ def train(model: nn.Module,
             distill_loss_sum += distill_loss.sum()
             for key, value in additional_losses_to_log.items():
                 additional_losses_sum[key] += value
+                context[key] = value
+
+            model.distill.update_meters(context)
 
 
         if isinstance(scheduler, NoamLR):
@@ -148,7 +158,7 @@ def train(model: nn.Module,
 
             lrs_str = ', '.join(f'lr_{i} = {lr:.4e}' for i, lr in enumerate(lrs))
             if model.use_distill:
-                distill_string = f'Main loss = {main_loss_avg:.4f}, distill loss = {distill_loss_avg:.4f}, '
+                distill_string = f'Main loss = {main_loss_avg:.4f}, scaled distill loss = {distill_loss_avg:.4f}, '
                 for key, val in additional_losses_sum.items():
                     distill_string += f'{key} = {val / iter_count:.4f}'
                     additional_losses_sum[key] = 0
@@ -165,7 +175,7 @@ def train(model: nn.Module,
                 writer.add_scalar('train_loss', loss_avg, n_iter)
                 if model.use_distill:
                     writer.add_scalar('main_loss', main_loss_avg, n_iter)
-                    writer.add_scalar('distill_loss', distill_loss_avg, n_iter)
+                    writer.add_scalar('scaled_distill_loss', distill_loss_avg, n_iter)
 
                 writer.add_scalar('param_norm', pnorm, n_iter)
                 writer.add_scalar('gradient_norm', gnorm, n_iter)

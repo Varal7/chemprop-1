@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+from collections import defaultdict
 from chemprop.distill.factory import RegisterDistill
 from chemprop.nn_utils import get_activation_function
 
@@ -8,15 +9,36 @@ from chemprop.nn_utils import get_activation_function
 class BaseDistill(nn.Module):
     def __init__(self, args):
         super(BaseDistill, self).__init__()
+        self.accepts_multi_images = False
+        self.args = args
+
+        def create_moving_averages():
+            return ExponentialMovingAverageMeter(args)
+
+        self.exponential_average_meters = defaultdict(create_moving_averages)
+        self.distill_loss = torch.FloatTensor(0)
 
     def forward(self, x):
         return x, {'student_z': x}
 
     def compute_loss(self, context):
-        return torch.tensor(0).to(context['device'])
+        return self.distill_loss.to(context['device'])
 
     def additional_losses_to_log(self):
-        return {}
+        return {'distill_loss': self.distill_loss.item()}
+
+    def scale_loss(self, distill_loss):
+        distill_avg = self.exponential_average_meters['distill_loss'].avg
+        main_avg = self.exponential_average_meters['loss'].avg
+
+        normalized_loss = distill_loss if distill_avg == 0 or main_avg == 0 else (distill_loss / distill_avg) * main_avg
+
+        return normalized_loss * self.args.distill_lambda
+
+    def update_meters(self, context):
+        for key, loss in context.items():
+            if key.endswith("loss"):
+                self.exponential_average_meters[key].update(loss.item() if isinstance(loss, torch.Tensor) else loss)
 
 @RegisterDistill("mse_distill")
 class MseDistill(BaseDistill):
@@ -24,16 +46,16 @@ class MseDistill(BaseDistill):
         super(MseDistill, self).__init__(args)
         self.ffn = get_auxiliary_ffn(get_encoded_dim(args), args.target_features_size, args)
         self.mse = nn.MSELoss(reduction = 'mean')
-        self.args = args
 
     def forward(self, x, **kwargs):
         return x, {'student_z': self.ffn(x)}
 
     def mse_loss_fn(self, context):
-        return self.args.distill_lambda * self.mse(context['student_z'], context['target_features_batch'].squeeze(1))
+        return self.mse(context['student_z'], context['target_features_batch'])
 
     def compute_loss(self, context):
-        return self.mse_loss_fn(context)
+        self.distill_loss = self.mse_loss_fn(context)
+        return self.scale_loss(self.distill_loss)
 
 @RegisterDistill("pred_as_hidden_mse_distill")
 class PredAsHiddenMseDistill(MseDistill):
@@ -47,7 +69,6 @@ class PredictionDistill(BaseDistill):
     def __init__(self, args):
         super(PredictionDistill, self).__init__(args)
         self.ffn = get_auxiliary_ffn(args.target_features_size, args.output_size, args)
-        self.args = args
 
     def distill_loss_func(self, preds, targets):
         if self.args.dataset_type in ['classification', 'multiclass']:
@@ -60,73 +81,16 @@ class PredictionDistill(BaseDistill):
         student_y = context['logits']
         teacher_loss = context['compute_loss_fn'](teacher_y)
         self.teacher_loss = teacher_loss.item()
-        return teacher_loss + self.args.distill_lambda * self.distill_loss_func(teacher_y.detach(), student_y)
+        self.distill_loss = self.distill_loss_func(teacher_y.detach(), student_y)
+        return teacher_loss + self.scale_loss(self.distill_loss)
 
-    def additional_losses_to_log(self):
-        return {"teacher_loss": self.teacher_loss}
-
-
-
-@RegisterDistill("regret_mse_distill")
-class RegretMseDistill(MseDistill):
-    def compute_loss(self, context):
-        mse_loss = self.mse_loss_fn(context)
-
-        heldout_student_y = context['model.ffn'](context['heldout_student_z'])
-        heldout_teacher_y = context['model.ffn'](context['heldout_target_features_batch'])
-
-        main_teacher_y = context['model.ffn'](context['target_features_batch'])
-        teacher_loss = context['compute_loss_fn'](main_teacher_y)
-
-        regret_loss = - context['heldout_compute_loss_fn'](heldout_teacher_y.detach()) + context['heldout_compute_loss_fn'](heldout_student_y)
-
-        self.teacher_loss = teacher_loss.item()
-        self.regret_loss = regret_loss.item()
-        self.mse_loss = mse_loss.item()
-
-        return self.args.distill_lambda * (regret_loss + mse_loss + teacher_loss)
 
     def additional_losses_to_log(self):
         return {
-            "teacher_loss": self.teacher_loss,
-            "regret_loss": self.regret_loss,
-            "mse_loss": self.mse_loss,
+            **super(self).additional_losses_to_log(),
+            "teacher_loss": self.teacher_loss
         }
 
-
-
-@RegisterDistill("regret_concat_distill")
-class RegretConcatDistill(BaseDistill):
-    def __init__(self, args):
-        super(RegretConcatDistill, self).__init__(args)
-        encoded_dim = get_encoded_dim(args)
-        image_dim = args.target_features_size
-        self.ffn = get_auxiliary_ffn(encoded_dim, image_dim, args)
-        self.readout = get_auxiliary_ffn(encoded_dim + image_dim, args.output_size, args)
-        self.mse = nn.MSELoss(reduction = 'mean')
-        self.args = args
-
-    def compute_loss(self, context):
-        main_teacher_y = self.readout(torch.cat([context['student_z'], context['target_features_batch']], dim=-1))
-
-        heldout_student_y = context['model.ffn'](context['heldout_student_z'])
-
-        heldout_teacher_y = self.readout(torch.cat([context['heldout_student_z'], context['heldout_target_features_batch']], dim=-1))
-
-        teacher_loss = context['compute_loss_fn'](main_teacher_y)
-
-        regret_loss = - context['heldout_compute_loss_fn'](heldout_teacher_y) + context['heldout_compute_loss_fn'](heldout_student_y)
-
-        self.teacher_loss = teacher_loss.item()
-        self.regret_loss = regret_loss.item()
-
-        return teacher_loss + self.args.distill_lambda * (regret_loss)
-
-    def additional_losses_to_log(self):
-        return {
-            "teacher_loss": self.teacher_loss,
-            "regret_loss": self.regret_loss,
-        }
 
 
 @RegisterDistill("regret_kl_distill")
@@ -137,6 +101,7 @@ class RegretKlDistill(BaseDistill):
         encoded_dim = get_encoded_dim(args)
         output_dim = args.output_size
         self.teacher_ffn = get_auxiliary_ffn(image_dim, output_dim, args)
+        assert self.args.main_loss_lambda == 0
 
         self.heldout_student_ffn = get_auxiliary_ffn(encoded_dim, output_dim, args)
         self.heldout_teacher_ffn = get_auxiliary_ffn(image_dim, output_dim, args)
@@ -148,7 +113,6 @@ class RegretKlDistill(BaseDistill):
         self.main_teacher_ffn = get_auxiliary_ffn(image_dim, output_dim, args)
 
         self.gradient_reversal = GradientReversal()
-        self.args = args
 
     def distill_loss_func(self, preds, targets):
         if self.args.dataset_type in ['classification', 'multiclass']:
@@ -165,9 +129,9 @@ class RegretKlDistill(BaseDistill):
             heldout_teacher_y = self.teacher_ffn(context['heldout_target_features_batch'])
             teacher_loss = context['compute_loss_fn'](teacher_y) + context['heldout_compute_loss_fn'](heldout_teacher_y)
             kl_loss = self.distill_loss_func(teacher_y.detach(), student_y) + self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
-            erm_loss = context['loss'] + context['heldout_loss'] + teacher_loss + self.args.distill_lambda * kl_loss
+            erm_loss = context['loss'] + context['heldout_loss'] + teacher_loss
 
-            return erm_loss
+            return erm_loss, kl_loss
 
         def compute_heldout_loss():
             heldout_student_z = context['heldout_student_z'].detach()
@@ -177,9 +141,10 @@ class RegretKlDistill(BaseDistill):
             heldout_teacher_loss = context['heldout_compute_loss_fn'](heldout_teacher_y)
             kl_loss = self.distill_loss_func(heldout_teacher_y.detach(), heldout_student_y)
 
-            return heldout_student_loss + heldout_teacher_loss + self.args.distill_lambda * kl_loss
+            return heldout_student_loss + heldout_teacher_loss, kl_loss
 
         def compute_main_loss():
+            raise NotImplementedError
             main_student_z = context['student_z']
             main_student_y = self.main_student_ffn(self.gradient_reversal(main_student_z))
 
@@ -199,20 +164,23 @@ class RegretKlDistill(BaseDistill):
             rgm_heldout_teacher_loss = context['compute_loss_fn'](rgm_heldout_teacher_y)
             rgm_heldout_kl_loss = self.distill_loss_func(rgm_heldout_teacher_y.detach(), rgm_heldout_student_y)
 
+
             rgm_loss = rgm_heldout_student_loss + rgm_heldout_teacher_loss + self.args.distill_lambda * rgm_heldout_kl_loss
 
-            return main_student_loss + main_teacher_loss + self.args.distill_lambda * main_kl_loss + self.args.distill_lambda * rgm_loss
+            return main_student_loss + main_teacher_loss, main_kl_loss + rgm_loss
 
 
         self.erm_loss = compute_erm_loss()
         self.heldout_loss = compute_heldout_loss()
         self.main_loss = compute_main_loss()
 
-        return self.erm_loss + self.heldout_loss + self.main_loss
+        self.distill_loss = self.erm_loss + self.heldout_loss + self.main_loss
+        return self.distill_loss
 
 
     def additional_losses_to_log(self):
         return {
+            **super(self).additional_losses_to_log(),
             "erm_loss": self.erm_loss,
             "heldout_loss": self.heldout_loss,
             "main_loss": self.main_loss,
@@ -271,3 +239,26 @@ class GradientReversal(nn.Module):
 
     def backward(self, grad_output):
         return -grad_output
+
+# Average Meter
+class ExponentialMovingAverageMeter:
+    def __init__(self, args):
+        self.reset()
+        self.args = args
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.first_iter = True
+
+    def update(self, val):
+        self.val = val
+        if isinstance(val, torch.Tensor):
+            raise ValueError
+        if self.first_iter:
+            self.avg = val
+            self.first_iter = False
+        else:
+            self.avg = (self.args.exponential_average_lambda) * self.avg + (1 - self.args.exponential_average_lambda) * self.val
+
+

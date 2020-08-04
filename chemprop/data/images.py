@@ -27,6 +27,8 @@ SAMPLER_REGISTRY = {
 class Images:
     def __init__(self, smiles2images, args):
         self.smiles2images = smiles2images
+        for smiles, tensor in self.smiles2images.items():
+            self.smiles2images[smiles] = tensor.to(args.device)
         self.args = args
         self.feature_size = list(smiles2images.values())[0].size(-1)
 
@@ -57,7 +59,7 @@ class Images:
         return Images(smiles2images, args)
 
     def get_item(self, smiles_list):
-        return torch.cat([SAMPLER_REGISTRY[self.args.image_sampler_name](self.smiles2images[smiles].to(self.args.device), self.args).unsqueeze(0) for smiles in smiles_list], dim=0)
+        return torch.cat([SAMPLER_REGISTRY[self.args.image_sampler_name](self.smiles2images[smiles], self.args).unsqueeze(0) for smiles in smiles_list], dim=0)
 
     def get_feature_size(self):
         return self.feature_size

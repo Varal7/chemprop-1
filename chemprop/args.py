@@ -171,6 +171,7 @@ class TrainArgs(CommonArgs):
     num_images_per_mol: int = 1
     smiles_to_images_pickle_path: str = None
     image_sampler_name: Literal['mean', 'random', 'max'] = 'mean'
+    exponential_average_lambda: float = 0.9
 
 
     # Training arguments
