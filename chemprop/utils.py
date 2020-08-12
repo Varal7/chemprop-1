@@ -19,27 +19,6 @@ from chemprop.models import MoleculeModel
 from chemprop.nn_utils import NoamLR
 
 
-
-# Average Meter
-class ExponentialMovingAverageMeter:
-    def __init__(self, args):
-        self.reset()
-        self.args = args
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.first_iter = True
-
-    def update(self, val):
-        self.val = val
-        if self.first_iter:
-            self.avg = val
-            self.first_iter = False
-        else:
-            self.avg = (self.args.exponential_average_lambda) * self.avg + (1 - self.args.exponential_average_lambda) * self.val
-
-
 def makedirs(path: str, isfile: bool = False):
     """
     Creates a directory given a path to either a directory or file.

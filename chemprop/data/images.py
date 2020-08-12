@@ -56,6 +56,8 @@ class Images:
 
         smiles2images = {k : torch.Tensor(v) for (k, v) in tqdm(smiles_images)}
 
+        torch.save(smiles2images, args.smiles_to_images_pickle_path)
+
         return Images(smiles2images, args)
 
     def get_item(self, smiles_list):

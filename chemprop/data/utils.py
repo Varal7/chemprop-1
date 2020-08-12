@@ -242,6 +242,8 @@ def get_data_from_smiles(smiles: List[str],
 
     return data
 
+def sample_data(data: MoleculeDataset, fraction: float, args: TrainArgs):
+    return split_data(data, 'random', (fraction, 1 - fraction, 0), args.seed)[0]
 
 def split_data(data: MoleculeDataset,
                split_type: str = 'random',

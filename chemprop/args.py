@@ -161,6 +161,7 @@ class TrainArgs(CommonArgs):
     ensemble_size: int = 1  # Number of models in ensemble
     distill_lambda: float = 0.1 # Lambda for distlil task
     distill: str = "base_distill"
+    distill_ffn_num_layers: int = 2
     use_distill: bool = False
     main_loss_lambda: float = 1
     additional_train_data: List[str] = []
@@ -181,6 +182,7 @@ class TrainArgs(CommonArgs):
     max_lr: float = 1e-3  # Maximum learning rate
     final_lr: float = 1e-4  # Final learning rate
     class_balance: bool = False  # Trains with an equal number of positives and negatives in each batch (only for single task classification)
+    fractional_training: float = 1 # What proportion of the training data to keep
 
 
     def __init__(self, *args, **kwargs) -> None:

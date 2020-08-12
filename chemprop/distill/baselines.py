@@ -61,7 +61,7 @@ class MseDistill(BaseDistill):
 class PredAsHiddenMseDistill(MseDistill):
     def forward(self, x, **kwargs):
         z = self.ffn(x)
-        return z, {'student_z': z}
+        return z.detach(), {'student_z': z}
 
 
 @RegisterDistill("prediction_distill")
@@ -72,7 +72,10 @@ class PredictionDistill(BaseDistill):
 
     def distill_loss_func(self, preds, targets):
         if self.args.dataset_type in ['classification', 'multiclass']:
-            return F.kl_div(preds, torch.sigmoid(targets), reduction='mean')
+            targets = torch.sigmoid(targets).unsqueeze(-1)
+            targets = torch.cat((1 - targets, targets), dim=-1)
+            preds = F.log_softmax(torch.cat((0 * preds.unsqueeze(-1), preds.unsqueeze(-1)), dim=-1), dim=-1)
+            return F.kl_div(preds, targets, reduction='mean')
         else:
             return F.mse_loss(preds, targets, reduction='mean')
 
@@ -81,13 +84,13 @@ class PredictionDistill(BaseDistill):
         student_y = context['logits']
         teacher_loss = context['compute_loss_fn'](teacher_y)
         self.teacher_loss = teacher_loss.item()
-        self.distill_loss = self.distill_loss_func(teacher_y.detach(), student_y)
+        self.distill_loss = self.distill_loss_func(student_y, teacher_y.detach())
         return teacher_loss + self.scale_loss(self.distill_loss)
 
 
     def additional_losses_to_log(self):
         return {
-            **super(self).additional_losses_to_log(),
+            **super().additional_losses_to_log(),
             "teacher_loss": self.teacher_loss
         }
 
@@ -180,7 +183,7 @@ class RegretKlDistill(BaseDistill):
 
     def additional_losses_to_log(self):
         return {
-            **super(self).additional_losses_to_log(),
+            **super().additional_losses_to_log(),
             "erm_loss": self.erm_loss,
             "heldout_loss": self.heldout_loss,
             "main_loss": self.main_loss,
@@ -208,7 +211,7 @@ def get_auxiliary_ffn(first_linear_dim, output_dim, args):
     activation = get_activation_function(args.activation)
 
     # Create auxiliary FFN layers
-    if args.ffn_num_layers == 1:
+    if args.distill_ffn_num_layers == 1:
         ffn = [
             dropout,
             nn.Linear(first_linear_dim, output_dim)
@@ -218,7 +221,7 @@ def get_auxiliary_ffn(first_linear_dim, output_dim, args):
             dropout,
             nn.Linear(first_linear_dim, args.ffn_hidden_size)
         ]
-        for _ in range(args.ffn_num_layers - 2):
+        for _ in range(args.distill_ffn_num_layers - 2):
             ffn.extend([
                 activation,
                 dropout,

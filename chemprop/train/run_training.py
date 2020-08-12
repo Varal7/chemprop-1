@@ -16,7 +16,7 @@ from .predict import predict
 from .train import train
 from chemprop.args import TrainArgs
 from chemprop.data import StandardScaler, MoleculeDataLoader, Images
-from chemprop.data.utils import get_class_sizes, get_data, get_task_names, split_data
+from chemprop.data.utils import get_class_sizes, get_data, get_task_names, split_data, sample_data
 from chemprop.models import MoleculeModel
 from chemprop.nn_utils import param_count
 from chemprop.utils import build_optimizer, build_lr_scheduler, get_loss_func, get_metric_func, load_checkpoint,\
@@ -81,6 +81,8 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
     else:
         train_data, val_data, test_data = split_data(data=data, split_type=args.split_type, sizes=args.split_sizes, seed=args.seed, args=args, logger=logger)
 
+    train_data = sample_data(data=train_data, fraction=args.fractional_training, args=args) if args.fractional_training < 1 else train_data
+
     if "regret" in args.distill and "heldout" not in additional_data:
         train_data, heldout_data, _ = split_data(data=train_data, split_type=args.split_type, sizes=(0.5, 0.5, 0.0), seed=args.seed, args=args, logger=logger)
         additional_data['heldout'] = heldout_data
@@ -142,6 +144,7 @@ def run_training(args: TrainArgs, logger: Logger = None) -> List[float]:
     else:
         cache = False
         num_workers = args.num_workers
+
 
     # Create data loaders
     train_data_loader = MoleculeDataLoader(
